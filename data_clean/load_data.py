@@ -1,6 +1,7 @@
 #!/usr/bin/env python
 # coding=utf-8
 import math
+import sys
 import gc
 from datetime import datetime, timedelta
 
@@ -101,28 +102,157 @@ print 'stable_num: ', stable_num
 index = 0
 for item in rmb:
     if item['bonus_rate'] > break_rate:
-        print '============'
-        print 'break point: ', item['time'], item['bonus_rate']
+        # print '============'
+        # print 'break point: ', item['time'], item['bonus_rate']
         buy_in = 1
         for i in xrange(0, silence_time):
             if index < silence_time:
                 buy_in = 0
-                print 'unuse point: no enough history'
+                # print 'unuse point: no enough history'
                 break
             if rmb[index -i -1]['time'] != (item['time'] - timedelta(minutes=i+1)):
                 buy_in = 0
-                print 'unuse point: time not match', rmb[index -i]['time'], item['time'] - timedelta(minutes=i+1)
+                # print 'unuse point: time not match', rmb[index -i]['time'], item['time'] - timedelta(minutes=i+1)
                 break
             if abs(rmb[index -i -1]['bonus_rate']) > stable_rate:
                 buy_in = 0
-                print 'unuse point: no enough silence', rmb[index -i -1]['bonus_rate']
+                # print 'unuse point: no enough silence', rmb[index -i -1]['bonus_rate']
                 break
-        if buy_in:
-            print 'buyin point: ', item['time'], item
+        # if buy_in:
+            # print 'buyin point: ', item['time'], item
+    index = index + 1
+
+#################################
+# 根据最小步长计算收益和突破
+#################################
+interval = 2 # 最小步长，单位 min
+
+# 离岸人民币数据 rmb
+# etf 50 数据 etf
+
+rmb_interval = []
+index = 0
+item_interval = {}
+# print 'rmb', len(rmb)
+for item in rmb:
+    index = index if index < interval else 0
+
+    if index == 0:
+        item_interval = {}
+        item_interval['time'] = item['time']
+        item_interval['price_open'] = item['price_open']
+        item_interval['price_high'] = item['price_high']
+        item_interval['price_low'] = item['price_low']
+        # print 'item_interval', item_interval
+
+    item_interval['price_high'] = item['price_high'] if item['price_high'] > item_interval['price_high'] else item_interval['price_high']
+    item_interval['price_low'] = item['price_low'] if item['price_low'] < item_interval['price_low'] else item_interval['price_low']
+
+    if index == interval - 1:
+        item_interval['price_close'] = item['price_close']
+        item_interval['bonus_rate'] = (item['price_close'] -  item['price_open'])/item['price_open']
+        rmb_interval.append(item_interval)
+
     index = index + 1
 
 
+# print 'rmb_interval', len(rmb_interval)
 
+################################################
+# 带间隔的突破点计算 
+################################################
+
+
+break_rate = 0.0005 # 突破阈值
+stable_rate = 0.0001 # 平稳阈值
+silence_time = 1 # 平稳最短时间，是 interval 的个数 
+
+buyin = {}
+index = 0
+for item in rmb_interval:
+    if item['bonus_rate'] > break_rate:
+        # print '============'
+        # print 'break point: ', item['time'], item['bonus_rate']
+        buy_in = 1
+        for i in xrange(0, silence_time):
+            if index < silence_time:
+                buy_in = 0
+                # print 'unuse point: no enough history'
+                break
+            if rmb_interval[index -i - 1]['time'] != (item['time'] - timedelta(minutes=(i+1) * interval)):
+                buy_in = 0
+                # print 'item.time', item['time']
+                # print 'unuse point: time not match', rmb_interval[index -i -1]['time'], item['time'] - timedelta(minutes=(i+1) * interval)
+                break
+            if abs(rmb_interval[index -i -1]['bonus_rate']) > stable_rate:
+                buy_in = 0
+                # print 'unuse point: no enough silence', rmb_interval[index -i -1]['bonus_rate']
+                break
+        if buy_in:
+            # print 'buyin point: ', item['time'], item
+            # print item['time']
+            gc.disable()
+            buyin[item['time']] = True
+            gc.enable()
+    index = index + 1
+
+#######################################
+# 根据 buyin 买入时间来买入和计算收益
+#######################################
+
+limitation = 30 # 等待涨幅的时长
+gate = 0.003 # 预期收益率
+torlence = 0.003 # 能够忍受的最大回撤
+
+success_num = 0
+lost_num = 0
+fial_num = 0
+
+index = 0
+for item in etf:
+    # 如果符合条件则买入
+    if buyin.has_key(item['time']):
+        price_open = 0
+        price_close = 0
+        success = 0
+        # 从下一秒开始买入，所以需要 +1
+        for i in xrange(index + 1, index + limitation + 1):
+            # print i
+            if index + limitation + 1 > len(etf):
+                success = 2
+                print 'etf buy fail, not enough data', item['time'] 
+                break
+            if etf[i]['time'] != (item['time'] + timedelta(minutes=(i - index))):
+                success = 2
+                print 'etf buy fail, time not match:', etf[i]['time'], item['time'] + timedelta(minutes=(i - index))
+                break
+            if i == index + 1:
+                price_open = etf[i]['price_open']
+            price_close = etf[i]['price_close']
+            bonus_rate = (price_close - price_open)/ price_open
+            if bonus_rate > gate:
+                success = 1
+                print 'etf buy bouns, rate = ', bonus_rate, item['time'], etf[i]['time']
+                break
+            if bonus_rate < -torlence:
+                success = 2
+                print 'etf buy loss, out of torlence, rate = ', bonus_rate, item['time']
+                break
+        if success == 0:
+            print 'etf buy loss, rate is note enough, rate = ', bonus_rate, item['time']
+    index = index + 1
+
+'''
+total_bonus = 0 
+max_bonus = 0
+index = 1
+for item in etf:
+    total_bonus = abs(item['bonus_rate'])
+    index = index  + 1
+    max_bonus = max_bonus if abs(item['bonus_rate']) < max_bonus else abs(item['bonus_rate'])
+
+print total_bonus / index, max_bonus
+'''
 
 
 
